@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('http://localhost:3000'),
+  metadataBase: new URL('https://incidentiq-observability.b22cs026738279.chatgpt.site'),
   title: 'IncidentIQ — Application Intelligence',
   description: 'AI-powered incident detection, correlation, and root-cause analysis for modern engineering teams.',
   openGraph: {
