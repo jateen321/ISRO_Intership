@@ -1,78 +1,91 @@
-# IncidentIQ
+# SENTINEL-OPS: Autonomous Vision-Language Tactical Defense & Incident Investigation System
 
-IncidentIQ is an interactive application-observability command center that turns noisy production telemetry into an explainable incident narrative. It demonstrates how platform teams can detect a regression, connect it to a deployment, understand the blast radius, and take a safe recovery action from one focused interface.
+> **BSERC Defence Space Summer Internship & ISRO Project Submission**  
+> **Domain**: Artificial Intelligence (AI/ML), Computer Vision & Autonomous Agent Systems  
+> **Hardware Requirements**: Laptop, Webcam, Network Connection
 
-![IncidentIQ social preview](public/og.png)
+---
 
-## Why this project exists
+## 📌 Project Overview
+**SENTINEL-OPS** is an autonomous multi-modal AI defense intelligence and perimeter surveillance system. It integrates **real-time video perception (Laptop Camera / OpenCV)**, custom **Deep Learning CNN threat scoring (PyTorch `ThreatSeverityNet`)**, and an **Autonomous ReAct AI Agent loop** with dynamic tool execution.
 
-On-call engineers rarely suffer from too little data. They suffer from context spread across metrics, traces, logs, deployments, and service maps. IncidentIQ explores a product response to that problem: correlate the evidence first, then present the most likely root cause with confidence, chronology, and a reversible recommended action.
+The project is hosted in an interactive **Next.js 16 + React 19 + TailwindCSS** tactical operations dashboard.
 
-## Product walkthrough
+---
 
-1. Start from a healthy 12-service production environment.
-2. Select **Inject incident** to simulate a payment-service regression.
-3. Observe SLO burn, latency, throughput, logs, and dependent services change together.
-4. Open **Investigate with AI** to see the correlated evidence timeline and 87% confidence root cause.
-5. Run the proposed rollback to return the system to a recovering state.
+## 🏛️ System Architecture
 
-Press `⌘ K` (or `Ctrl K`) anywhere to open global search. The dashboard is responsive and supports keyboard navigation, reduced-motion preferences, accessible dialog semantics, live status announcements, and mobile-friendly tables.
+```
++--------------------------+     +-------------------------------+     +----------------------------------+
+| Laptop Camera /          | --> | PyTorch CNN Classifier        | --> | Autonomous ReAct AI Agent        |
+| Real-Time Video Feed     |     | (ThreatSeverityNet.py)        |     | (app/api/agent/route.ts)         |
++--------------------------+     +-------------------------------+     +----------------------------------+
+                                                                                       |
+                                                                                       | (Invokes Tactical Tools)
+                                                                                       v
+                                                                      +-----------------------------------+
+                                                                      | Tool Execution Suite              |
+                                                                      | - tool_run_pytorch_classifier     |
+                                                                      | - tool_escalate_defcon            |
+                                                                      | - tool_query_threat_intel_db      |
+                                                                      | - tool_log_telemetry              |
+                                                                      +-----------------------------------+
+                                                                                       |
+                                                                                       v
+                                                                      +-----------------------------------+
+                                                                      | Next.js 16 Tactical Ops UI        |
+                                                                      | (http://localhost:3000)           |
+                                                                      +-----------------------------------+
+```
 
-## Engineering highlights
+---
 
-- Event-driven incident simulation with coordinated state across metrics, services, navigation, charts, and logs.
-- Explainable RCA drawer that connects deployment, saturation, latency, and error-budget evidence.
-- Keyboard-first command palette and semantic, accessible interaction patterns.
-- Responsive operations UI designed for desktop command centers and mobile on-call use.
-- Cloudflare Worker-compatible React output through Vinext and the OpenAI Sites Vite integration.
-- Share-ready Open Graph artwork and metadata for portfolio and recruiter links.
+## 🚀 Key Technical Features
 
-## Stack
+1. **Edge Computer Vision**:
+   - Direct laptop webcam integration via browser `navigator.mediaDevices.getUserMedia`.
+   - Real-time sector monitoring and passive perimeter anomaly triggers.
 
-- React 19 + TypeScript
-- Next-compatible App Router
-- Vinext + Vite
-- Tailwind CSS 4 processing with a custom CSS design system
-- OpenAI Sites / Cloudflare Workers deployment target
+2. **Custom PyTorch Deep Learning Classifier (`ThreatSeverityNet.py`)**:
+   - 3-layer Convolutional feature extractor (`nn.Conv2d`, `BatchNorm2d`, `MaxPool2d`, `AdaptiveAvgPool2d`).
+   - Binary threat probability head (`Linear` + `Sigmoid`) outputting real-time confidence scores.
 
-## Run locally
+3. **Autonomous AI Defense Agent (ReAct Loop)**:
+   - Evaluates multi-modal visual observations using ReAct (`Thought` $\rightarrow$ `Action` $\rightarrow$ `Tool Output`).
+   - Dynamically manages security readiness (`DEFCON-5 Nominal`, `DEFCON-3 Elevated`, `DEFCON-1 Critical`).
+   - Automatically generates structured military intelligence briefings and incident telemetry logs.
 
-Requirements: Node.js 22.13 or newer.
+---
 
+## 🛠️ Tech Stack
+
+* **Frontend**: Next.js 16, React 19, TypeScript, TailwindCSS 4, Vite
+* **Deep Learning Framework**: PyTorch (`torch`, `torchvision`, `torch.nn.Module`)
+* **Computer Vision**: OpenCV, Browser MediaStream API
+* **Backend**: Next.js Server App Router API (`/api/agent`)
+
+---
+
+## 💻 How to Run
+
+### 1. Launch the Next.js Operations Dashboard
 ```bash
-npm install
 npm run dev
 ```
+Open **`http://localhost:3000`** in your browser.
+- Click **"Start Laptop Camera"** to initialize live video perception.
+- Click **"Command Agent"** or enable **"Autonomous Sentinel Scan"** to observe the AI Agent's real-time Chain of Thought.
 
-Open `http://localhost:3000`. For a production check:
-
+### 2. Run Standalone PyTorch Deep Learning Test
 ```bash
-npm run build
-npm run lint
+python3 ThreatSeverityNet.py
 ```
 
-## Architecture
+---
 
-The demo intentionally keeps the incident dataset local and deterministic, which makes the recruiter walkthrough instant and repeatable. The UI models the boundaries a production version would use:
-
-- **Signal ingestion:** OpenTelemetry logs, metrics, and distributed traces.
-- **Correlation:** time-window joins across deploy events and service dependencies.
-- **Incident state:** severity, SLO impact, affected services, and lifecycle.
-- **Investigation:** evidence ranking, root-cause confidence, and operator-approved actions.
-
-A production extension would move event state behind an API, stream telemetry through a queue, store time-series data in an observability backend, and require authenticated approval plus audit logging for remediation.
-
-## Resume-ready summary
-
-> Built IncidentIQ, a responsive React/TypeScript observability dashboard that simulates production incidents, correlates deployment and telemetry signals, and presents explainable root-cause analysis with operator-approved remediation. Designed accessible keyboard workflows and deployed a Worker-compatible build.
-
-## Interview talking points
-
-- Why correlation and evidence chronology are more trustworthy than an unexplained AI answer.
-- How error-budget burn provides better operational context than raw error rate.
-- Why remediation remains human-approved even when diagnosis is automated.
-- How deterministic demo data improves portfolio reliability while preserving realistic system boundaries.
-
-## Disclaimer
-
-IncidentIQ is a portfolio simulation. Its metrics and AI analysis are deterministic demo data, and the displayed rollback command is never executed against infrastructure.
+## 📋 BSERC Submission Checklist
+- [x] Project Title & Domain Classification (AI/ML & Defence Space)
+- [x] Functional Prototype with Laptop Webcam Integration
+- [x] PyTorch Deep Learning Neural Network Architecture
+- [x] Autonomous AI Agent Tool Calling Suite
+- [x] Comprehensive Technical Documentation
