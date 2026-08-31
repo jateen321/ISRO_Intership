@@ -202,6 +202,87 @@ ONNX Runtime execution provider is requested, but this wasn't forced and
 directly diffed in a real browser due to no straightforward way to disable
 `navigator.gpu` for a spawned worker without adding test-only code.
 
+### F-09 (Low, fixed) — `class_buildings` audit counter was silently always zero
+Found while auditing the first real-data `geoshield.prepare` run against the
+downloaded xBD Challenge training set (2,799 pairs, all accepted, no missing
+pairs or invalid records — the pipeline itself checked out). The emitted
+`audit.json`'s `class_buildings` field (a per-building damage-class count,
+distinct from `class_pixels`, a per-pixel count) came back `{"1": 0, "2": 0,
+"3": 0, "4": 0}` even though `class_pixels` showed a real, plausible xBD class
+distribution (126M undamaged / 15.7M minor / 19.8M major / 9.3M destroyed
+pixels across ~2,800 tiles) — i.e. real damage polygons were being parsed and
+rasterized correctly, but the separate building-count tally wasn't moving at
+all, on real data or synthetic.
+Root cause (`ml/geoshield/xbd.py`, `prepare_dataset`): `class_buildings` was
+initialized with **string** keys (`{str(label): 0 for label in range(1, 5)}`)
+but the per-polygon loop checked membership with the **int** label
+`read_label_features` returns (`if label in class_buildings`). `1 in
+{"1": 0, ...}` is always `False` in Python (dict membership is exact-match on
+keys, and `int` never equals `str`), so the increment line never ran,
+regardless of what the input data contained. `class_pixels` was unaffected
+because it's computed independently by byte-scanning the rendered mask
+image, not from this loop.
+**Fix:** compare with `str(label) in class_buildings` (keeping string keys,
+consistent with `class_pixels`' convention) instead of switching to int keys.
+Regression test: `ml/tests/test_xbd.py::test_prepare_writes_one_tile_for_512_input`
+now asserts `class_buildings == {"1": 1, "2": 0, "3": 0, "4": 1}` against a
+fixture with one no-damage and one destroyed polygon — a dict comparing
+against all-zero would have caught this before it ever reached real data.
+This field is audit-only metadata (not read by `splits.py` or `train.py`),
+so it did not affect any model, split, or export correctness — only the
+printed/saved audit summary was wrong.
+
+### F-10 (Medium, fixed) — `history.json` was only written after the *entire* training run finished
+Found while about to launch the first real, multi-hour, multi-epoch training
+run on the downloaded xBD data (previously only smoke-tested with a fast
+eight-tile synthetic fixture, where this never mattered). `train()` appended
+each epoch's record to an in-memory `history` list inside the epoch loop, but
+only called `history_path.write_text(...)` once, **after** the loop
+completed. Per-epoch checkpoints (`{model}_last.pt`, `{model}_best.pt`) *are*
+written inside the loop, so a crash or interruption mid-run wouldn't break
+resumability — but it would silently lose the entire loss/metric curve
+collected up to that point (worse than F-01, which was specifically about
+losing history across a `--resume`; this is about never persisting it at
+all until a run completes cleanly), and it left no way to observe progress
+on a run in progress by reading the file.
+**Fix:** moved the `history_path.write_text(...)` call inside the epoch
+loop, after each epoch's record is appended, so the file is current after
+every epoch. `ml/tests/test_train.py`'s existing history assertions check
+final-state content only, so this needed no test changes — a redundant
+final write was simply removed rather than added.
+
+### F-11 (Critical, fixed) — `geoshield.evaluate` was never implemented
+Found while assembling the commands to run Step 8's real evaluation now
+that real xBD data and a split manifest exist. `ml/geoshield/evaluate.py`'s
+`main()` printed a "scaffold ready" placeholder when `--checkpoint`/`--data`
+were absent, but unconditionally raised `NotImplementedError("Evaluation
+loop is implemented after the training gate.")` the moment both were
+supplied — i.e. the entry point could never actually evaluate anything,
+independent of whether real data was available. This is a bigger gap than
+OQ-01 (blocked on the dataset download): even with the dataset in hand,
+there was no way to run Step 7's acceptance check ("Siamese beats
+post-only baseline on held-out damage macro-F1") or Step 8's evaluation
+artifacts, because the code path itself didn't exist yet. No test file
+(`ml/tests/test_evaluate.py`) previously existed either, so nothing in the
+suite could have caught this.
+
+**Fix:** implemented `evaluate()` by reusing `train.py`'s own
+already-tested `_run_epoch`/`_loader`/`select_device` (the same
+confusion-matrix-based metrics computation the training loop uses every
+epoch, run once over a held-out split instead) rather than duplicating
+that logic. Model architecture and image size are read from the
+checkpoint's own recorded `config` (written by `train.py`), not re-passed
+via CLI flags, so an evaluation run can't silently mismatch what a
+checkpoint was actually trained as. Output is the same
+`summarize_metrics()` shape `train.py` already produces
+(`damage_macro_f1`, per-class F1/IoU, confusion matrix, localization F1)
+plus run metadata (checkpoint path/epoch, split, record/tile counts),
+written to `--output` as JSON. Added
+`ml/tests/test_evaluate.py` (4 new tests: post-only metrics shape, siamese
+dual-input path, missing-checkpoint error, empty-split error) — full
+suite now 23/23 passing (19 before F-09/F-10/F-11 this session, +4 new
+evaluate tests; F-09's fix only added an assertion to an existing test).
+
 ## Environment
 
 - macOS, Apple Silicon (arm64), MPS acceleration available and used for
@@ -324,3 +405,20 @@ npm run build && npm start   # wrangler dev on the real build, http://localhost:
   F-08), both tooling/deployment issues rather than application logic.
   Committed as `a44b270`, `fd30411`, `1bd07db`.
   35 vitest tests passing, typecheck/lint/build all clean.
+- **2026-08-31 (evening)**: user downloaded and verified the official xBD
+  Challenge training set (~7.8GB, SHA1-verified against xview2.org's
+  published hash) and extracted it into the repo working directory; moved
+  into the already-gitignored `data/xbd/raw/train` so it can't be
+  accidentally committed (see `.gitignore`'s `/data/` rule). Ran
+  `geoshield.prepare` against real data for the first time — this
+  surfaced F-09 (`class_buildings` audit counter silently always zero) — and,
+  in preparing to launch the first real multi-hour training run, also found
+  and fixed F-10 (`history.json` only written at end of run, not
+  per-epoch). Both fixes verified: full `pytest ml/tests` suite (19/19,
+  now 20/20 after F-09's added assertion) still passes. `geoshield.splits`
+  run against the real 2,799-record manifest — 10 distinct events, heavily
+  size-skewed (`socal-fire`: 823 pairs down to `guatemala-volcano`: 18), so
+  the resulting train/val/test split is far from an even 70/15/15 by record
+  count (1,170 / 630 / 999) even though it's balanced by event — expected
+  behavior of event-held-out splitting with this few, this uneven a set of
+  events, not a bug.

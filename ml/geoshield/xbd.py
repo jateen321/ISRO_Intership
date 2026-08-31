@@ -174,7 +174,7 @@ def prepare_dataset(root: Path, output: Path, tile_size: int = 512, limit: int |
             ignored += mask_stats["ignored_polygons"]
             labels = read_label_features(Path(record.post_label))
             for label, _ in labels:
-                if label in class_buildings:
+                if str(label) in class_buildings:
                     class_buildings[str(label)] += 1
             mask_values = mask.tobytes()
             for value in range(5):

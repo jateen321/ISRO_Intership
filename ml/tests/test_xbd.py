@@ -44,3 +44,8 @@ def test_prepare_writes_one_tile_for_512_input(tmp_path):
     assert audit["records_accepted"] == 1
     assert len(list((tmp_path / "prepared" / "tiles" / "mask").glob("*.png"))) == 1
     assert (tmp_path / "prepared" / "audit.json").exists()
+    # The fixture's one label has a "no-damage" polygon and a "destroyed"
+    # polygon; class_buildings must count both (regression for a dict
+    # key-type mismatch: str(label) keys vs. int label lookups meant this
+    # counter silently stayed all-zero regardless of input).
+    assert audit["class_buildings"] == {"1": 1, "2": 0, "3": 0, "4": 1}

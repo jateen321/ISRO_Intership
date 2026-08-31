@@ -247,7 +247,12 @@ def train(args: argparse.Namespace) -> dict[str, object]:
         _save_checkpoint(args.output / f"{args.model}_last.pt", model, optimizer, scheduler, epoch, best_metric, config)
         if improved:
             _save_checkpoint(args.output / f"{args.model}_best.pt", model, optimizer, scheduler, epoch, best_metric, config)
-    history_path.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
+        # Written every epoch, not just at the end: a crash or kill mid-run
+        # (a real risk on multi-hour real-data training) would otherwise lose
+        # the entire loss/metric curve even though per-epoch checkpoints
+        # survive, and there'd be no way to observe progress on a long run
+        # in progress.
+        history_path.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
     return {"model": args.model, "best_validation_damage_macro_f1": best_metric, "epochs_completed": len(history), "device": str(device), "output": str(args.output)}
 
 
