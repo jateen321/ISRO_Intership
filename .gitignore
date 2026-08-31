@@ -51,6 +51,11 @@ next-env.d.ts
 *.pth
 *.pt
 *.onnx.tmp
+*.onnx
+# The validated, parity-checked browser inference model IS a shipped
+# static asset (Step 9 of the plan), not a training artifact.
+!/public/models/*.onnx
+!/public/models/*.json
 
 # Python environments and notebook output
 /.venv/
