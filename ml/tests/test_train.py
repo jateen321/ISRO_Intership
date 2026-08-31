@@ -8,9 +8,9 @@ torch = pytest.importorskip("torch")
 from geoshield.train import build_parser, train  # noqa: E402
 
 
-def _smoke_args(tmp_path, **overrides):
+def _smoke_args(tmp_path, model="post_only", **overrides):
     argv = [
-        "--model", "post_only",
+        "--model", model,
         "--smoke-test",
         "--output", str(tmp_path),
         "--seed", "42",
@@ -49,4 +49,14 @@ def test_checkpoint_resume_continues_training(tmp_path):
 
     history = json.loads((tmp_path / "post_only_history.json").read_text(encoding="utf-8"))
     assert [record["epoch"] for record in history] == list(range(8))
+    assert all(math.isfinite(record["train_loss"]) for record in history)
+
+
+def test_siamese_smoke_test_trains_through_fused_branch(tmp_path):
+    # Proves the shared-encoder + per-scale concat-fusion forward/backward
+    # path is wired correctly, independent of the real xBD dataset.
+    result = train(_smoke_args(tmp_path, model="siamese", **{"--epochs": 60}))
+    assert result["best_validation_damage_macro_f1"] > 0.85
+
+    history = json.loads((tmp_path / "siamese_history.json").read_text(encoding="utf-8"))
     assert all(math.isfinite(record["train_loss"]) for record in history)

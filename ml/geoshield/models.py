@@ -109,11 +109,18 @@ if nn is not None:
             self.decoder = Decoder((64, 64, 128, 256, 512), num_classes)
 
         def forward(self, before_image, after_image):
-            before = self.encoder(before_image)
-            after = self.encoder(after_image)
+            batch_size = before_image.shape[0]
+            # Run the shared encoder once on the two views concatenated along the
+            # batch dimension, rather than as two separate calls. With a shared
+            # encoder and small per-branch batch sizes, two separate calls make
+            # BatchNorm accumulate running statistics from two different image
+            # distributions (pre- vs post-disaster) in the same buffers, which
+            # never stabilizes; a single joint-batch pass keeps BN statistics
+            # consistent across both branches without changing the weights.
+            combined_features = self.encoder(torch.cat((before_image, after_image), dim=0))
             fused = tuple(
-                fuse(torch.cat((before_feature, after_feature, (after_feature - before_feature).abs()), dim=1))
-                for fuse, before_feature, after_feature in zip(self.fuse, before, after)
+                fuse(torch.cat((feature[:batch_size], feature[batch_size:], (feature[batch_size:] - feature[:batch_size]).abs()), dim=1))
+                for fuse, feature in zip(self.fuse, combined_features)
             )
             return self.decoder(fused)
 
