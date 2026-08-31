@@ -36,3 +36,33 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# GeoShield ML data and training artifacts
+/data/
+/datasets/
+/checkpoints/
+/runs/
+/training_runs/
+/generated_masks/
+/ml/data/
+/ml/checkpoints/
+/ml/runs/
+*.ckpt
+*.pth
+*.pt
+*.onnx.tmp
+
+# Python environments and notebook output
+/.venv/
+/venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Generated reports and visual audits
+/artifacts/metrics/
+/artifacts/visual_audits/
+/artifacts/predictions/
+/artifacts/training/

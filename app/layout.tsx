@@ -13,21 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://incidentiq-observability.b22cs026738279.chatgpt.site'),
-  title: 'IncidentIQ — Application Intelligence',
-  description: 'AI-powered incident detection, correlation, and root-cause analysis for modern engineering teams.',
-  openGraph: {
-    title: 'IncidentIQ — Application Intelligence',
-    description: 'Detect incidents, correlate production signals, and explain root cause in seconds.',
-    type: 'website',
-    images: [{ url: '/og.png', width: 1732, height: 909, alt: 'IncidentIQ — AI-powered incident intelligence' }],
-  },
-  twitter: {
-    card: 'summary_large_image',
-    title: 'IncidentIQ — Application Intelligence',
-    description: 'Detect incidents, correlate production signals, and explain root cause in seconds.',
-    images: ['/og.png'],
-  },
+  title: 'Untitled site',
 };
 
 export default function RootLayout({
