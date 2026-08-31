@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import random
 from collections import Counter
+import argparse
+import hashlib
+import json
+from pathlib import Path
 from typing import Iterable, Mapping, Sequence
+
+
+REQUIRED_DAMAGE_CLASSES = (1, 2, 3, 4)
 
 
 def _event_histogram(records: Sequence[Mapping[str, object]]) -> dict[str, Counter[int]]:
@@ -77,3 +84,60 @@ def assert_disjoint(split_manifest: Mapping[str, Sequence[str]]) -> None:
         if overlap:
             raise ValueError(f"Events appear in multiple splits ({split}): {sorted(overlap)}")
         seen.update(events)
+
+
+def assert_class_support(records: Iterable[Mapping[str, object]], split_manifest: Mapping[str, Sequence[str]]) -> None:
+    """Require every split to contain all four labeled damage classes."""
+
+    rows = list(records)
+    for split, events in split_manifest.items():
+        classes = {int(label) for row in rows if row.get("event") in events for label in row.get("classes", ())}  # type: ignore[union-attr]
+        missing = sorted(set(REQUIRED_DAMAGE_CLASSES).difference(classes))
+        if missing:
+            raise ValueError(f"Split {split} is missing damage classes: {missing}")
+
+
+def write_split_manifest(records_path: Path, output_path: Path, *, seed: int = 42) -> dict[str, object]:
+    """Create a checksum-bound event split manifest from prepared records."""
+
+    raw = records_path.read_bytes()
+    records = json.loads(raw.decode("utf-8"))
+    if not isinstance(records, list):
+        raise ValueError("Prepared records must be a JSON list")
+    event_splits = build_event_split(records, seed=seed)
+    assert_disjoint(event_splits)
+    assert_class_support(records, event_splits)
+    records_by_split = {
+        split: sorted(str(row["identifier"]) for row in records if row.get("event") in events)
+        for split, events in event_splits.items()
+    }
+    manifest: dict[str, object] = {
+        "version": 1,
+        "seed": seed,
+        "ratios": {"train": 0.70, "val": 0.15, "test": 0.15},
+        "records_sha256": hashlib.sha256(raw).hexdigest(),
+        "events": event_splits,
+        "records": records_by_split,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Generate a deterministic event-held-out xBD split manifest.")
+    parser.add_argument("--records", type=Path, required=True, help="Prepared records.json")
+    parser.add_argument("--output", type=Path, required=True, help="Output split_manifest.json")
+    parser.add_argument("--seed", type=int, default=42)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    manifest = write_split_manifest(args.records, args.output, seed=args.seed)
+    print(json.dumps(manifest, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
