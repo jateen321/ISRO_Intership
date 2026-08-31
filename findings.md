@@ -127,6 +127,81 @@ quantization is expected to shift some predictions). Both the fp32-parity
 and quantization-agreement numbers are recorded in the exported metadata
 JSON so neither is hidden.
 
+### F-07 (High, fixed) — vinext's import.meta.url rewriter breaks Vite's module-worker pattern
+The standard, textbook Vite pattern `new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })`
+failed at runtime with `SecurityError: Failed to construct 'Worker': Script at
+'file:///l…' cannot be accessed from origin 'http://localhost:3000'`.
+Root cause, found by reading the actual transformed source the dev server
+served (`curl http://localhost:3000/lib/geoshield/client.ts`): Vite's own
+worker-URL transform rewrites the second `new URL(...)` argument into `'' +
+import.meta.url` (a `BinaryExpression`) as part of producing its output.
+vinext's `import.meta.url` rewriter
+(`node_modules/vinext/dist/plugins/import-meta-url.js`,
+`isNewUrlExpression`/`collectImportMetaUrlRanges`) only recognizes a
+*direct* `import.meta.url` as the second argument to `new URL(...)` as the
+pattern to leave alone; wrapped inside a `BinaryExpression` it no longer
+matches, so vinext's rewriter descends into it anyway and replaces the
+nested `import.meta.url` with a literal `file:///ROOT/...` string — which
+then fails in the browser, since that's not a valid script origin. This is
+a real incompatibility between two pieces of this project's own tooling
+(Vite's worker plugin + vinext's import-meta-url plugin), not something
+fixable by editing `node_modules`. **Fix:** switched to Vite's `?worker`
+import suffix (`import GeoShieldWorker from './worker?worker'`, then `new
+GeoShieldWorker()`) — a different code path resolved through the module
+graph rather than a runtime `import.meta.url` string, so it isn't affected.
+Needed a small ambient module declaration
+(`lib/geoshield/worker-module.d.ts`) since this project's `tsconfig.json`
+doesn't include `vite/client` types, and an oxlint disable comment on that
+one import line since oxlint's import resolver doesn't read wildcard
+ambient `declare module '*?worker'` types the way `tsc` does.
+
+**This bug is dev-server-only** — verified by checking the actual
+production build output (`dist/client/_next/static/worker-*.js`) contained
+zero references to `window`/HMR client code even before this fix, and
+`npm run build` always succeeded. Only `npm run dev`'s live HMR path was
+broken. If testing this project's worker code locally, prefer `npm run
+build && npm start` (`wrangler dev` against the real build) over `npm run
+dev` for anything touching `lib/geoshield/worker.ts`.
+
+### F-08 (Critical, fixed) — onnxruntime-web's own WebGPU wasm binary exceeds Cloudflare's asset limit
+Separate from F-06 (our model file): once the Worker construction bug
+above was fixed, `npm start` (`wrangler dev` against the real production
+build) failed outright with a Cloudflare-verified error, not a guess:
+`Asset too large. Cloudflare Workers supports assets with sizes of up to 25
+MiB. We found a file
+.../ort-wasm-simd-threaded.jsep-D-icqfN-.wasm with a size of 26.5 MiB.`
+This is ONNX Runtime Web's own WebGPU-capable wasm runtime binary
+(`onnxruntime-web`'s default import discovers it via its own internal
+`new URL(..., import.meta.url)`, which Vite's asset pipeline then
+auto-bundles as a local static asset) — nothing to do with our model or
+our code, and not something achievable to shrink by quantization the way
+F-06 was, since it's third-party runtime code we don't control.
+
+Checked the available onnxruntime-web wasm variants
+(`node_modules/onnxruntime-web/dist/*.wasm`): the plain (non-jsep, no
+WebGPU) build is 13.3MB — well under the limit — but dropping WebGPU
+support entirely would violate the plan's explicit "prefer WebGPU; fall
+back to WASM" requirement for Step 10. **Fix:** `onnxruntime-web` ships a
+package.json `"onnxruntime-web-use-extern-wasm"` import condition
+specifically for this situation — it resolves to a build
+(`ort.min.mjs`) that expects the wasm runtime to be loaded from an
+external URL (via `ort.env.wasm.wasmPaths`) instead of being bundled
+locally. Added `resolve: { conditions: ['onnxruntime-web-use-extern-wasm'] }`
+to `vite.config.ts` and set `ort.env.wasm.wasmPaths` to a version-pinned
+jsDelivr CDN URL in `worker.ts`. This only fetches generic runtime engine
+code (no user data, no model weights) from the CDN — the privacy
+guarantee (no image upload) is unaffected, and after this fix `wrangler
+dev`'s asset-size check passed with the model file (13MB) as the largest
+shipped asset. Verified end-to-end afterward: full assessment completed
+via WebGPU (confirmed by the UI's own runtime badge, not assumed), cancel
+mid-run recovered cleanly, and two more assessments ran without a page
+reload. Not yet explicitly cross-verified: WASM-path output vs WebGPU-path
+output numerical equivalence (Step 10's gate asks for this) — both paths
+share the identical tiling/postprocessing code and differ only in which
+ONNX Runtime execution provider is requested, but this wasn't forced and
+directly diffed in a real browser due to no straightforward way to disable
+`navigator.gpu` for a spawned worker without adding test-only code.
+
 ## Environment
 
 - macOS, Apple Silicon (arm64), MPS acceleration available and used for
@@ -189,6 +264,9 @@ JSON so neither is hidden.
   model lands, the old placeholder commit stays in git history unless
   someone explicitly asks for history to be rewritten — not doing that
   without being asked.
+- **OQ-04**: WASM-path vs WebGPU-path output equivalence (F-08) wasn't
+  directly diffed — see F-08 for why. Worth forcing both paths and
+  comparing masks before calling Step 10 fully closed.
 
 ## Planned verification (for what's still open)
 
@@ -196,10 +274,7 @@ JSON so neither is hidden.
   visual audit grid and `audit.json` for missing pairs / invalid polygons /
   class balance, then re-run splits, training (both models, real 30-epoch
   config), evaluation, and a real ONNX export — replacing the placeholder.
-- Step 10 (browser inference) needs manual verification in an actual browser
-  (WebGPU vs WASM equivalence, memory release on cancel) — this can't be
-  meaningfully unit-tested under vitest/jsdom, which has no WebGPU/WASM
-  execution.
+- OQ-04 above: explicit WASM-vs-WebGPU mask diff.
 
 ## How to reproduce the audit
 
@@ -212,8 +287,13 @@ PYTHONPATH=ml .venv/bin/python -m pytest ml/tests -q   # 19 passed
 # Frontend
 npm run lint
 npx tsc --noEmit
-npx vitest run                                          # includes lib/geoshield (15 passed)
+npx vitest run                                          # 35 passed, incl. lib/geoshield
 npm run build
+
+# Manually verifying anything in lib/geoshield/worker.ts (Web Worker +
+# onnxruntime-web): use the real production build, not `npm run dev` — see
+# F-07. `npm run dev`'s HMR client breaks module workers in this project.
+npm run build && npm start   # wrangler dev on the real build, http://localhost:8787
 ```
 
 ## Tooling
@@ -222,6 +302,9 @@ npm run build
   torchvision, onnx, onnxruntime, onnxscript, pillow, shapely, pytest).
 - ML entry points: `python -m geoshield.{prepare,train,evaluate,export_onnx}`
   (run with `PYTHONPATH=ml`, or from inside `ml/` directly).
+- `.claude/launch.json` runs `npm run dev` for the Browser-pane preview —
+  fine for everything except the Worker/onnxruntime-web path (F-07); use
+  `npm start` against a real build for that instead.
 - No Claude Code hook is wired to this file in this pass — not set up
   automatically here since it wasn't asked for this time; a SessionStart
   hook injecting this file's contents (as was done in an earlier, unrelated
@@ -231,8 +314,13 @@ npm run build
 ## Changelog
 
 - **2026-08-31**: created this log, covering Steps 1–9 (F-01 through F-06)
-  plus the in-progress Step 11/13 pure-function work (`lib/geoshield/postprocess.ts`,
-  `lib/geoshield/reports.ts`, 15 vitest tests passing). Steps 6, 7, 9 (with the
+  plus the Step 11/13 pure-function work. Steps 6, 7, 9 (with the
   quantization fix) committed as `5b87ba1`, `706d548`, `3b75f42`, `322c68d`.
-  Steps 10 and 12 (Web Worker inference wiring, full UI integration) not
-  started yet at time of writing.
+- **2026-08-31 (later)**: Steps 10 and 12 (Web Worker inference, full UI
+  integration) built and manually verified end-to-end against a real
+  `wrangler dev` build — full assessment completing via WebGPU, cancel
+  recovering cleanly, repeat runs without reload, no image bytes leaving
+  the browser. Found and fixed two more real bugs in the process (F-07,
+  F-08), both tooling/deployment issues rather than application logic.
+  Committed as `a44b270`, `fd30411`, `1bd07db`.
+  35 vitest tests passing, typecheck/lint/build all clean.
