@@ -192,7 +192,13 @@ def prepare_dataset(root: Path, output: Path, tile_size: int = 512, limit: int |
                     _tile(before, left, top, tile_size).save(before_path)
                     _tile(after, left, top, tile_size).save(after_path)
                     _tile(mask, left, top, tile_size).save(mask_path)
-                    tile_paths.append({"before": str(before_path), "after": str(after_path), "mask": str(mask_path)})
+                    tile_paths.append(
+                        {
+                            "before": str(before_path.relative_to(output)),
+                            "after": str(after_path.relative_to(output)),
+                            "mask": str(mask_path.relative_to(output)),
+                        }
+                    )
                     tile_index += 1
             prepared_records.append({"event": record.event, "identifier": record.identifier, "tiles": tile_paths, "classes": [label for label, _ in labels]})
             accepted += 1
