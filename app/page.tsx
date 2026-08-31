@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowUpRight,
   BarChart3,
   Check,
@@ -22,7 +23,12 @@ import {
   ShieldCheck,
   Sparkles,
   X,
+  XCircle,
 } from 'lucide-react';
+import { InferenceClient, type AssessmentOutcome } from '@/lib/geoshield/client';
+import { buildOverlayRgba } from '@/lib/geoshield/overlay';
+import { buildAssessmentJson, buildRegionsCsv, reportFilename } from '@/lib/geoshield/reports';
+import { WORKING_SIZE } from '@/lib/geoshield/tensor';
 
 type SlotName = 'before' | 'after';
 
@@ -31,12 +37,24 @@ type ImageSlot = {
   url: string;
 };
 
-const DAMAGE_CLASSES = [
-  { name: 'Undamaged', color: '#59d39b', description: 'No visible change' },
-  { name: 'Minor damage', color: '#f6c85f', description: 'Light structural impact' },
-  { name: 'Major damage', color: '#ef8b4e', description: 'Severe structural impact' },
-  { name: 'Destroyed', color: '#ee6571', description: 'Building loss likely' },
+type AssessmentPhase = 'idle' | 'running' | 'complete' | 'error' | 'cancelled';
+
+const DAMAGE_CLASSES: Array<{ classId: 1 | 2 | 3 | 4; key: string; name: string; color: string; description: string }> = [
+  { classId: 1, key: 'undamaged', name: 'Undamaged', color: '#59d39b', description: 'No visible change' },
+  { classId: 2, key: 'minor', name: 'Minor damage', color: '#f6c85f', description: 'Light structural impact' },
+  { classId: 3, key: 'major', name: 'Major damage', color: '#ef8b4e', description: 'Severe structural impact' },
+  { classId: 4, key: 'destroyed', name: 'Destroyed', color: '#ee6571', description: 'Building loss likely' },
 ];
+
+function downloadText(filename: string, contents: string, mimeType: string) {
+  const blob = new Blob([contents], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 const SAMPLE_PAIRS = [
   { id: 'moore', label: 'Moore tornado', meta: 'United States · tornado' },
@@ -117,7 +135,18 @@ export default function Home() {
   const [sample, setSample] = useState('');
   const [showMethodology, setShowMethodology] = useState(false);
   const [notice, setNotice] = useState('');
-  const [runRequested, setRunRequested] = useState(false);
+
+  const [phase, setPhase] = useState<AssessmentPhase>('idle');
+  const [progress, setProgress] = useState<{ completedTiles: number; totalTiles: number } | null>(null);
+  const [outcome, setOutcome] = useState<AssessmentOutcome | null>(null);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [overlayOpacity, setOverlayOpacity] = useState(0.6);
+  const [visibleClasses, setVisibleClasses] = useState<Set<number>>(new Set([1, 2, 3, 4]));
+  const [swipePosition, setSwipePosition] = useState(50);
+
+  const clientRef = useRef<InferenceClient | null>(null);
+  const cancelRef = useRef<(() => void) | null>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const replaceSlot = useCallback((slot: SlotName, file: File) => {
     const url = URL.createObjectURL(file);
@@ -127,7 +156,9 @@ export default function Home() {
       setAfter((current) => { if (current) URL.revokeObjectURL(current.url); return { file, url }; });
     }
     setSample('');
-    setRunRequested(false);
+    setPhase('idle');
+    setOutcome(null);
+    setErrorMessage('');
     setNotice('');
   }, []);
 
@@ -137,7 +168,9 @@ export default function Home() {
     } else {
       setAfter((current) => { if (current) URL.revokeObjectURL(current.url); return null; });
     }
-    setRunRequested(false);
+    setPhase('idle');
+    setOutcome(null);
+    setErrorMessage('');
     setNotice('');
   }, []);
 
@@ -146,21 +179,89 @@ export default function Home() {
     if (after) URL.revokeObjectURL(after.url);
   }, [before, after]);
 
+  // One worker (and its loaded model session) persists across multiple
+  // assessments; only torn down when the component unmounts.
+  useEffect(() => () => clientRef.current?.dispose(), []);
+
   const pair = before && after ? { before, after } : null;
   const hasPair = pair !== null;
 
   const runAssessment = () => {
-    if (!hasPair) return;
-    setRunRequested(true);
-    setNotice('Inference is not connected yet. The validated ONNX model will be added in the next build stage.');
+    if (!pair) return;
+    clientRef.current ??= new InferenceClient();
+    setPhase('running');
+    setProgress({ completedTiles: 0, totalTiles: 4 });
+    setOutcome(null);
+    setErrorMessage('');
+    setNotice('');
+
+    const handle = clientRef.current.runAssessment(pair.before.file, pair.after.file, (nextProgress) => setProgress(nextProgress));
+    cancelRef.current = handle.cancel;
+    handle.promise
+      .then((result) => {
+        setOutcome(result);
+        setPhase('complete');
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          setPhase('cancelled');
+          return;
+        }
+        setErrorMessage(error instanceof Error ? error.message : 'Assessment failed for an unknown reason.');
+        setPhase('error');
+      })
+      .finally(() => {
+        cancelRef.current = null;
+      });
+  };
+
+  const cancelAssessment = () => {
+    cancelRef.current?.();
   };
 
   const reset = () => {
+    cancelRef.current?.();
     clearSlot('before');
     clearSlot('after');
     setSample('');
-    setRunRequested(false);
+    setPhase('idle');
+    setOutcome(null);
+    setErrorMessage('');
     setNotice('');
+    setSwipePosition(50);
+  };
+
+  const toggleClassVisible = (classId: number) => {
+    setVisibleClasses((current) => {
+      const next = new Set(current);
+      if (next.has(classId)) next.delete(classId);
+      else next.add(classId);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas || !outcome) return;
+    canvas.width = WORKING_SIZE;
+    canvas.height = WORKING_SIZE;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const rgba = buildOverlayRgba(outcome.mask, WORKING_SIZE, WORKING_SIZE, overlayOpacity, visibleClasses);
+    // buildOverlayRgba always backs its return value with a plain ArrayBuffer
+    // (`new Uint8ClampedArray(n)`); TS's generic TypedArray<ArrayBufferLike>
+    // signature just can't express that statically.
+    context.putImageData(new ImageData(rgba as Uint8ClampedArray<ArrayBuffer>, WORKING_SIZE, WORKING_SIZE), 0, 0);
+  }, [outcome, overlayOpacity, visibleClasses]);
+
+  const exportJson = () => {
+    if (!outcome) return;
+    downloadText(reportFilename('assessment', outcome.result, 'json'), buildAssessmentJson(outcome.result), 'application/json');
+  };
+
+  const exportCsv = () => {
+    if (!outcome) return;
+    downloadText(reportFilename('regions', outcome.result, 'csv'), buildRegionsCsv(outcome.result), 'text/csv');
   };
 
   return (
@@ -186,8 +287,11 @@ export default function Home() {
           </div>
           <div className="rail-section rail-bottom">
             <span className="rail-label">Model status</span>
-            <div className="model-status"><span className="status-dot muted" /> ONNX pending</div>
-            <div className="rail-version">v0.1 · Interface stage</div>
+            <div className="model-status">
+              <span className="status-dot muted" /> ONNX model · untrained placeholder
+            </div>
+            {outcome && <div className="rail-version">Runtime: {outcome.result.runtime === 'webgpu' ? 'WebGPU' : 'WASM'}</div>}
+            <div className="rail-version">v0.2 · Browser inference stage</div>
           </div>
         </aside>
 
@@ -206,8 +310,13 @@ export default function Home() {
 
           <div className="privacy-banner" id="privacy">
             <ShieldCheck size={16} />
-            <span><strong>Your imagery stays on this device.</strong> No upload is sent to a server. Browser inference will be enabled after the model checkpoint is validated.</span>
+            <span><strong>Your imagery stays on this device.</strong> Inference runs entirely in your browser via ONNX Runtime Web (WebGPU, falling back to WASM) — no image is ever uploaded to a server.</span>
             <button type="button" aria-label="Learn about privacy"><CircleHelp size={15} /></button>
+          </div>
+
+          <div className="inline-notice placeholder-model-notice">
+            <AlertTriangle size={16} />
+            <span><strong>Placeholder model.</strong> The bundled ONNX model has not been trained on real satellite imagery — it was fit to a synthetic eight-tile fixture to validate the pipeline. Results below are not meaningful. See <code>findings.md</code>.</span>
           </div>
 
           <section className="analysis-card" aria-labelledby="input-heading">
@@ -233,35 +342,118 @@ export default function Home() {
           </section>
 
           <section className="action-row" aria-label="Assessment actions">
-            <div className="readiness"><span className={`readiness-dot ${hasPair ? 'ready' : ''}`} />{hasPair ? 'Pair ready for assessment' : 'Waiting for two images'}</div>
+            <div className="readiness">
+              <span className={`readiness-dot ${hasPair ? 'ready' : ''}`} />
+              {phase === 'running'
+                ? `Assessing… tile ${progress?.completedTiles ?? 0} of ${progress?.totalTiles ?? 4}`
+                : hasPair
+                  ? 'Pair ready for assessment'
+                  : 'Waiting for two images'}
+            </div>
             <div className="action-buttons">
               <button type="button" className="secondary-button" onClick={reset} disabled={!before && !after && !sample}><RefreshCcw size={15} /> Reset</button>
-              <button type="button" className="primary-button" onClick={runAssessment} disabled={!hasPair}><ScanSearch size={16} /> Run assessment <span className="button-key">⌘ ↵</span></button>
+              {phase === 'running' ? (
+                <button type="button" className="secondary-button" onClick={cancelAssessment}><XCircle size={15} /> Cancel</button>
+              ) : (
+                <button type="button" className="primary-button" onClick={runAssessment} disabled={!hasPair}><ScanSearch size={16} /> Run assessment <span className="button-key">⌘ ↵</span></button>
+              )}
             </div>
           </section>
+
+          {phase === 'running' && progress && (
+            <progress className="progress-track" value={progress.completedTiles} max={progress.totalTiles} aria-label="Assessment progress" />
+          )}
+
+          {phase === 'error' && (
+            <output className="inline-notice error-notice"><AlertTriangle size={16} /><span>{errorMessage}</span><button type="button" aria-label="Dismiss error" onClick={() => setPhase('idle')}><X size={14} /></button></output>
+          )}
+
+          {phase === 'cancelled' && (
+            <output className="inline-notice"><Info size={16} /><span>Assessment cancelled.</span><button type="button" aria-label="Dismiss notice" onClick={() => setPhase('idle')}><X size={14} /></button></output>
+          )}
 
           {notice && <output className="inline-notice"><Info size={16} /><span>{notice}</span><button type="button" aria-label="Dismiss notice" onClick={() => setNotice('')}><X size={14} /></button></output>}
 
           <section className="results-card" aria-labelledby="results-heading">
             <div className="card-heading results-heading">
               <div><span className="step-number">02</span><div><p className="eyebrow">Assessment output</p><h2 id="results-heading">Damage overview</h2></div></div>
-              <button type="button" className="export-button" disabled><Download size={14} /> Export report</button>
+              <div className="export-row">
+                <button type="button" className="export-button" onClick={exportJson} disabled={!outcome}><Download size={14} /> JSON</button>
+                <button type="button" className="export-button" onClick={exportCsv} disabled={!outcome}><Download size={14} /> CSV</button>
+              </div>
             </div>
             {hasPair ? (
               <div className="comparison-grid">
                 <div className="comparison-view">
-                  <div className="comparison-toolbar"><span>Input pair</span><span className="toolbar-hint"><MousePointer2 size={12} /> Overlay available after inference</span></div>
-                  <div className="image-pair-preview">
-                    <figure><img src={pair.before.url} alt="Before disaster uploaded preview" /><figcaption>Before disaster</figcaption></figure>
-                    <figure><img src={pair.after.url} alt="After disaster uploaded preview" /><figcaption>After disaster</figcaption></figure>
+                  <div className="comparison-toolbar">
+                    <span>{outcome ? 'Before / after (drag to compare)' : 'Input pair'}</span>
+                    <span className="toolbar-hint"><MousePointer2 size={12} /> {outcome ? 'Overlay on the after image' : 'Overlay available after inference'}</span>
                   </div>
+                  {outcome ? (
+                    <>
+                      <div className="swipe-viewer">
+                        <img src={pair.after.url} alt="After disaster" className="swipe-base" />
+                        <canvas ref={overlayCanvasRef} className="swipe-overlay-canvas" aria-hidden="true" />
+                        <div className="swipe-clip" style={{ clipPath: `inset(0 ${100 - swipePosition}% 0 0)` }}>
+                          <img src={pair.before.url} alt="Before disaster" className="swipe-base" />
+                        </div>
+                        <input
+                          type="range"
+                          className="swipe-slider"
+                          min={0}
+                          max={100}
+                          value={swipePosition}
+                          onChange={(event) => setSwipePosition(Number(event.target.value))}
+                          aria-label="Before/after comparison position"
+                        />
+                      </div>
+                      <div className="overlay-controls">
+                        <label className="opacity-control">
+                          <span>Overlay opacity</span>
+                          <input type="range" min={0} max={1} step={0.05} value={overlayOpacity} onChange={(event) => setOverlayOpacity(Number(event.target.value))} />
+                        </label>
+                        <div className="class-toggle-row">
+                          {DAMAGE_CLASSES.map((item) => (
+                            <button
+                              key={item.key}
+                              type="button"
+                              className={`class-toggle ${visibleClasses.has(item.classId) ? 'active' : ''}`}
+                              style={{ '--toggle-color': item.color } as React.CSSProperties}
+                              onClick={() => toggleClassVisible(item.classId)}
+                            >
+                              <i /> {item.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="image-pair-preview">
+                      <figure><img src={pair.before.url} alt="Before disaster uploaded preview" /><figcaption>Before disaster</figcaption></figure>
+                      <figure><img src={pair.after.url} alt="After disaster uploaded preview" /><figcaption>After disaster</figcaption></figure>
+                    </div>
+                  )}
                 </div>
-                <div className="pending-output">
-                  <div className="pending-icon"><BarChart3 size={22} /></div>
-                  <h3>{runRequested ? 'Model connection pending' : 'Ready for model inference'}</h3>
-                  <p>{runRequested ? 'This interface is wired for the ONNX runtime, but no validated model artifact is included yet.' : 'Run an assessment once the ONNX model is connected. Results will appear here without leaving your browser.'}</p>
-                  <div className="pending-meta"><span><span className="status-dot muted" /> ONNX model</span><span>Not connected</span></div>
-                </div>
+                {outcome ? (
+                  <div className="confidence-panel">
+                    <h3>Confidence &amp; limitations</h3>
+                    <ul>
+                      <li>Processed at {outcome.result.inputDimensions[0]}×{outcome.result.inputDimensions[1]}px in {Math.round(outcome.result.processingTimeMs)}ms via {outcome.result.runtime === 'webgpu' ? 'WebGPU' : 'WASM'}.</li>
+                      <li>Region counts are estimates from connected-component analysis, not a verified building count.</li>
+                      <li>Not validated for operational or emergency decisions.</li>
+                    </ul>
+                    {outcome.result.warnings.map((warning) => (
+                      <div className="confidence-warning" key={warning}><AlertTriangle size={13} /><span>{warning}</span></div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="pending-output">
+                    <div className="pending-icon"><BarChart3 size={22} /></div>
+                    <h3>{phase === 'running' ? 'Assessment in progress' : 'Ready for model inference'}</h3>
+                    <p>{phase === 'running' ? 'Tiling, running the model, and stitching results — this happens entirely in your browser.' : 'Run an assessment to see a damage overlay, severity breakdown, and exportable regions.'}</p>
+                    <div className="pending-meta"><span><span className={`status-dot ${phase === 'running' ? '' : 'muted'}`} /> ONNX model</span><span>{phase === 'running' ? 'Running' : 'Ready (placeholder)'}</span></div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="empty-results">
@@ -276,8 +468,46 @@ export default function Home() {
           </section>
 
           <section className="stats-grid" aria-label="Assessment statistics">
-            {['Buildings detected', 'Affected area', 'Model confidence'].map((label) => <article className="stat-card" key={label}><p>{label}</p><strong>—</strong><span>Available after inference</span></article>)}
+            {DAMAGE_CLASSES.map((item) => {
+              const stat = outcome?.result.classStatistics[item.key];
+              return (
+                <article className="stat-card" key={item.key} style={{ borderLeft: `3px solid ${item.color}` }}>
+                  <p>{item.name}</p>
+                  <strong>{stat ? `${stat.percentage.toFixed(1)}%` : '—'}</strong>
+                  <span>{stat ? `${stat.estimatedRegions} estimated region${stat.estimatedRegions === 1 ? '' : 's'}` : 'Available after inference'}</span>
+                </article>
+              );
+            })}
           </section>
+
+          {outcome && outcome.result.regions.length > 0 && (
+            <section className="region-table-card" aria-label="Estimated building regions">
+              <div className="card-heading"><p className="eyebrow">Detected regions</p><h2>{outcome.result.regions.length} estimated building region{outcome.result.regions.length === 1 ? '' : 's'}</h2></div>
+              <div className="region-table-scroll">
+                <table className="region-table">
+                  <thead><tr><th>ID</th><th>Class</th><th>Confidence</th><th>Pixel area</th></tr></thead>
+                  <tbody>
+                    {outcome.result.regions.map((region) => {
+                      const classInfo = DAMAGE_CLASSES.find((item) => item.classId === region.damageClass);
+                      return (
+                        <tr key={region.id}>
+                          <td>{region.id}</td>
+                          <td><span className="region-class-chip" style={{ '--toggle-color': classInfo?.color } as React.CSSProperties}>{classInfo?.name ?? region.damageClass}</span></td>
+                          <td>{(region.confidence * 100).toFixed(1)}%</td>
+                          <td>{region.pixelArea.toLocaleString()}px</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+          {outcome && outcome.result.regions.length === 0 && (
+            <section className="region-table-card" aria-label="Estimated building regions">
+              <p className="no-regions-message">No building-sized regions were detected in this pair.</p>
+            </section>
+          )}
 
           <section className="how-it-works" id="how-it-works">
             <div><p className="eyebrow">Designed for clarity</p><h2>From two images to a<br /><em>damage map.</em></h2></div>

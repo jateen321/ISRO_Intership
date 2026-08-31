@@ -9,7 +9,8 @@ describe('GeoShield analysis shell', () => {
     expect(screen.getByText(/waiting for two images/i)).toBeInTheDocument();
     expect(screen.getByText(/your assessment will appear here/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /run assessment/i })).toBeDisabled();
-    expect(screen.getByText(/buildings detected/i)).toBeInTheDocument();
+    expect(screen.getAllByText('Undamaged').length).toBeGreaterThan(0);
+    expect(screen.getByText(/placeholder model/i)).toBeInTheDocument();
   });
 
   it('shows a ready state after two image files are selected', () => {
