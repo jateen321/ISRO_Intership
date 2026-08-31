@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   ArrowUpRight,
   BarChart3,
-  Check,
   CircleHelp,
   CloudUpload,
   Download,
@@ -55,12 +54,6 @@ function downloadText(filename: string, contents: string, mimeType: string) {
   link.click();
   URL.revokeObjectURL(url);
 }
-
-const SAMPLE_PAIRS = [
-  { id: 'moore', label: 'Moore tornado', meta: 'United States · tornado' },
-  { id: 'socal', label: 'SoCal wildfire', meta: 'United States · wildfire' },
-  { id: 'palus', label: 'Palu tsunami', meta: 'Indonesia · tsunami' },
-];
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -132,7 +125,6 @@ function UploadCard({
 export default function Home() {
   const [before, setBefore] = useState<ImageSlot | null>(null);
   const [after, setAfter] = useState<ImageSlot | null>(null);
-  const [sample, setSample] = useState('');
   const [showMethodology, setShowMethodology] = useState(false);
   const [notice, setNotice] = useState('');
 
@@ -155,7 +147,6 @@ export default function Home() {
     } else {
       setAfter((current) => { if (current) URL.revokeObjectURL(current.url); return { file, url }; });
     }
-    setSample('');
     setPhase('idle');
     setOutcome(null);
     setErrorMessage('');
@@ -223,7 +214,6 @@ export default function Home() {
     cancelRef.current?.();
     clearSlot('before');
     clearSlot('after');
-    setSample('');
     setPhase('idle');
     setOutcome(null);
     setErrorMessage('');
@@ -329,15 +319,17 @@ export default function Home() {
               <div className="pair-connector" aria-hidden="true"><span>+</span></div>
               <UploadCard name="After disaster" slot={after} onFile={(file) => replaceSlot('after', file)} onClear={() => clearSlot('after')} />
             </div>
-            <div className="sample-row">
-              <div className="sample-label"><Sparkles size={14} /><span>Or explore a sample pair</span></div>
-              <div className="sample-options">
-                {SAMPLE_PAIRS.map((item) => (
-                  <button key={item.id} type="button" className={`sample-button ${sample === item.id ? 'selected' : ''}`} onClick={() => { setSample(item.id); setNotice('Sample imagery will be bundled after dataset licensing is verified.'); }}>
-                    <span>{item.label}</span><small>{item.meta}</small>{sample === item.id && <Check size={13} />}
-                  </button>
-                ))}
-              </div>
+            <div className="sample-guidance">
+              <Sparkles size={14} />
+              <span>
+                No sample imagery is bundled here — the xBD training dataset&rsquo;s redistribution terms couldn&rsquo;t be
+                confirmed, so no dataset imagery is committed to this repository (see <code>findings.md</code>, OQ-02).
+                To try a real before/after pair, register for the official{' '}
+                <a href="https://xview2.org/dataset" target="_blank" rel="noreferrer noopener">
+                  xView2 / xBD dataset <ArrowUpRight size={11} />
+                </a>{' '}
+                and upload any tile pair above.
+              </span>
             </div>
           </section>
 
@@ -351,7 +343,7 @@ export default function Home() {
                   : 'Waiting for two images'}
             </div>
             <div className="action-buttons">
-              <button type="button" className="secondary-button" onClick={reset} disabled={!before && !after && !sample}><RefreshCcw size={15} /> Reset</button>
+              <button type="button" className="secondary-button" onClick={reset} disabled={!before && !after}><RefreshCcw size={15} /> Reset</button>
               {phase === 'running' ? (
                 <button type="button" className="secondary-button" onClick={cancelAssessment}><XCircle size={15} /> Cancel</button>
               ) : (
