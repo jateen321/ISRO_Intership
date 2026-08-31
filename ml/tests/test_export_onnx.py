@@ -36,7 +36,9 @@ def test_export_produces_valid_onnx_with_parity(smoke_checkpoint, tmp_path):
     metadata = export(args)
 
     assert onnx_path.exists()
-    assert metadata["pixel_agreement"] >= 0.999
+    assert metadata["fp32_pixel_agreement"] >= 0.999
+    assert 0.0 <= metadata["quantization_pixel_agreement"] <= 1.0
+    assert metadata["size_bytes"] < metadata["fp32_size_bytes"]
     assert metadata["trained_on_real_data"] is False
     assert metadata["input_shapes"] == {"before": [1, 3, 64, 64], "after": [1, 3, 64, 64]}
     assert metadata["output_shape"] == [1, 5, 64, 64]

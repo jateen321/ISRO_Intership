@@ -1,9 +1,11 @@
 {
   "model": "siamese",
   "onnx_path": "public/models/geoshield-siamese.onnx",
-  "sha256": "6370b6515d20164731010d84017d222da05b4d9fb1ed4699290a43cb98929885",
-  "size_bytes": 53640959,
-  "exported_at": "2026-08-31T15:15:52.728737+00:00",
+  "sha256": "23fb6b129cbf7f7a34142b212cc2d24315305538a1c4db069170ac694e4e1ac6",
+  "size_bytes": 13532597,
+  "fp32_size_bytes": 53640959,
+  "quantization": "int8-dynamic (Conv/MatMul/Gemm, onnxruntime.quantization.quantize_dynamic)",
+  "exported_at": "2026-08-31T15:22:54.695101+00:00",
   "opset": 18,
   "input_shapes": {
     "before": [
@@ -32,7 +34,7 @@
     "major",
     "destroyed"
   ],
-  "checkpoint_path": "/tmp/geoshield-export-ckpt/siamese_best.pt",
+  "checkpoint_path": "/tmp/geoshield-export-ckpt3/siamese_best.pt",
   "checkpoint_epoch": 45,
   "checkpoint_config": {
     "model": "siamese",
@@ -52,7 +54,8 @@
     ],
     "data": "."
   },
-  "pixel_agreement": 1.0,
+  "fp32_pixel_agreement": 1.0,
+  "quantization_pixel_agreement": 0.9986176490783691,
   "parity_samples": 8,
   "trained_on_real_data": false
 }
