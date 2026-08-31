@@ -49,6 +49,17 @@ export default defineConfig(async () => {
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
+    resolve: {
+      // onnxruntime-web's default bundle discovers its own .wasm runtime via
+      // `new URL(..., import.meta.url)`, which Vite then bundles as a local
+      // static asset — but the WebGPU-capable variant is 26.5MB, over
+      // Cloudflare Workers' 25 MiB per-asset limit (confirmed via `wrangler
+      // dev`, not assumed). This condition switches to onnxruntime-web's
+      // "extern wasm" build, which expects `ort.env.wasm.wasmPaths` to be
+      // set at runtime (worker.ts points it at a CDN) instead of bundling
+      // the runtime locally.
+      conditions: ['onnxruntime-web-use-extern-wasm'],
+    },
     plugins: [
       vinext(),
       sites(),
