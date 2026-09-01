@@ -222,26 +222,14 @@ cosine LR schedule, early stopping (patience 7) on held-out
 after every epoch, so a killed or crashed run loses at most the epoch in
 progress, never the curve so far.
 
-### Training locally
+### Training locally (smoke test only)
 
-```bash
-PYTHONPATH=ml .venv/bin/python -m geoshield.train \
-  --model post_only \
-  --data data/prepared \
-  --split-manifest data/prepared/split_manifest.json \
-  --output ml/checkpoints
+Do **not** run the real xBD training job on a laptop. The full 512px run is
+intended for a hosted CUDA GPU (Colab, Kaggle, or Google Cloud); see the
+hosted instructions below. The repository's local MPS run was stopped and
+is not a quality result.
 
-PYTHONPATH=ml .venv/bin/python -m geoshield.train \
-  --model siamese \
-  --data data/prepared \
-  --split-manifest data/prepared/split_manifest.json \
-  --output ml/checkpoints
-```
-
-30 epochs over the full training tier is a multi-hour run per model on a
-laptop GPU (Apple Silicon MPS auto-selected via `select_device()`, falling
-back to CUDA or CPU). Resume an interrupted run with `--resume
-ml/checkpoints/<model>_last.pt`.
+Use the local command only for the synthetic correctness gate:
 
 Before touching real data at all, there's a fast correctness gate that
 doesn't need the dataset:
