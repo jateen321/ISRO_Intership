@@ -443,18 +443,20 @@ or VM workflow for real training.
 
 ## Open questions
 
-- **OQ-01 (blocking, not resolvable by me)**: the real xBD training dataset
-  (~7.8GB, official challenge training split) is not present locally. The
-  plan explicitly requires a **manual, registered download** — Step 4:
-  "Require the user to manually register and download the dataset. Do not
-  automate sign-in or commit dataset content." This blocks: real training
-  runs, Step 7's actual acceptance criterion (Siamese beats post-only
-  baseline on held-out damage macro-F1 — currently unfulfillable, and not
-  reported as fulfilled), Step 8's real evaluation artifacts, and a
-  genuinely-trained ONNX export. Everything built so far proves the
-  *pipeline* is correct (training loop, loss, checkpointing, export, parity)
-  using the synthetic eight-tile fixture — none of it is a claim about real
-  detection quality.
+- **OQ-01 (blocking, requires hosted GPU)**: the official xBD Challenge
+  training split has now been manually downloaded, verified, extracted, and
+  prepared locally under the gitignored `data/` tree (2,799 accepted records,
+  deterministic event-held-out manifest). The remaining work is to run both
+  real 30-epoch models on a hosted CUDA GPU. A local attempt was explicitly
+  stopped at the user's request and also hit the restricted macOS
+  `torch_shm_manager` path when multiprocessing workers were enabled. The
+  plan requires a manual, registered download and does not permit committing
+  dataset content. Until the hosted run completes, Step 7's actual acceptance
+  criterion (Siamese beats post-only on held-out damage macro-F1), Step 8's
+  real evaluation artifacts, and a genuinely-trained ONNX export remain
+  unfulfilled. The current code and committed ONNX asset prove only that the
+  *pipeline* works on the synthetic eight-tile fixture; they make no claim
+  about real detection quality.
 - **OQ-02**: Step 14 requires "legally redistributable, attributed pre/post
   examples" for the sample selector. I can't independently verify xBD
   redistribution terms with confidence. Per the plan's own fallback ("If
@@ -473,10 +475,10 @@ or VM workflow for real training.
 
 ## Planned verification (for what's still open)
 
-- Once xBD is downloaded: re-run `python -m geoshield.prepare`, inspect the
-  visual audit grid and `audit.json` for missing pairs / invalid polygons /
-  class balance, then re-run splits, training (both models, real 30-epoch
-  config), evaluation, and a real ONNX export — replacing the placeholder.
+- On a hosted CUDA runtime, inspect the existing `data/prepared/audit.json`
+  and `visual_audit.png`, then run the documented supervisor for both real
+  models, evaluate the untouched test split, and export the winning checkpoint
+  to replace the synthetic placeholder model.
 - OQ-04 above: explicit WASM-vs-WebGPU mask diff.
 
 ## How to reproduce the audit
