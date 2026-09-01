@@ -38,7 +38,9 @@ the current one.
 ## Environment
 
 - Python deps live only in the repo-root `.venv/` (gitignored), never the
-  system Python. Set up: `python3 -m venv .venv && .venv/bin/pip install -e ml/[dev]`.
+  system Python. Set up: `python3 -m venv .venv && .venv/bin/pip install -e "ml/[dev]"`.
+  (Quote it — zsh treats unquoted `ml/[dev]` as a glob character class and
+  fails with "no matches found".)
 - Run any `ml/geoshield` entry point with `PYTHONPATH=ml`:
   `PYTHONPATH=ml .venv/bin/python -m geoshield.{prepare,splits,train,evaluate,export_onnx}`.
 - Node deps are normal (`npm install`); `engines.node >= 22.13.0`.
@@ -81,6 +83,6 @@ the current one.
 ## When you find a new bug
 
 Log it in `findings.md` (pattern: root cause, measured effect, fix,
-regression test — follow the existing F-01..F-10 entries) before or
+regression test — follow the existing F-01..F-15 entries) before or
 alongside fixing it. This file has been the project's actual audit trail
 across sessions; keep it that way rather than starting a separate one.

@@ -39,6 +39,10 @@ def test_checkpoint_resume_continues_training(tmp_path):
 
     checkpoint = torch.load(tmp_path / "post_only_last.pt", map_location="cpu")
     assert checkpoint["epoch"] == 4
+    # Early-stopping's patience counter must be checkpointed like best_metric
+    # is, or a crash-and-resume silently resets how close a run was to
+    # stopping (a real risk: multi-hour real-data runs get interrupted).
+    assert "stale_epochs" in checkpoint and isinstance(checkpoint["stale_epochs"], int)
 
     resumed_args = _smoke_args(tmp_path, **{"--epochs": 8, "--resume": tmp_path / "post_only_last.pt"})
     second = train(resumed_args)

@@ -61,6 +61,8 @@ tsconfig.tsbuildinfo
 # Python environments and notebook output
 /.venv/
 /venv/
+*.egg-info/
+*.ses
 __pycache__/
 *.py[cod]
 .pytest_cache/

@@ -283,6 +283,113 @@ dual-input path, missing-checkpoint error, empty-split error) — full
 suite now 23/23 passing (19 before F-09/F-10/F-11 this session, +4 new
 evaluate tests; F-09's fix only added an assertion to an existing test).
 
+### F-12 (Low, fixed) — early-stopping's stale-epoch counter didn't survive `--resume`
+Found immediately after the real `post_only` training run was killed
+unexpectedly at epoch 2 (see the changelog entry below — no Python
+traceback, consistent with the process being terminated by something
+outside the training loop rather than crashing on its own) and needed to
+be resumed. While preparing the resume, noticed `train()` initialized
+`stale_epochs = 0` unconditionally, never restoring it from a checkpoint's
+recorded value the way `best_metric` already is (`best_metric =
+float(checkpoint.get("best_metric", best_metric))`). `_save_checkpoint`
+didn't even write a `stale_epochs` field to the checkpoint dict to restore
+from. Effect: resuming a run that was, say, 6 non-improving epochs into a
+7-epoch early-stopping patience window would silently reset that count to
+zero, giving the model a fresh full patience window instead of the one
+epoch it actually had left — not a crash or data-loss bug like F-01, but a
+real behavioral inconsistency between an uninterrupted run and a
+resumed-after-interruption run that should be identical.
+**Fix:** `_save_checkpoint` now takes and writes `stale_epochs`; `train()`
+restores it from the checkpoint on `--resume`, the same way `best_metric`
+already was. Regression: extended
+`ml/tests/test_train.py::test_checkpoint_resume_continues_training` to
+assert the checkpoint carries an integer `stale_epochs` field (a full
+early-stopping-boundary integration test would need to force deterministic
+non-improving epochs via mocking `_run_epoch`, which felt like more
+machinery than this fix's severity warranted; this at least catches the
+field being silently dropped again).
+
+### F-13 (Low, fixed) — unquoted `pip install -e ml/[dev]` fails under zsh
+Found while writing `README.md`'s setup instructions and cross-checking
+this file's own "How to reproduce the audit" snippet against it (this
+project's shell is zsh, per environment info, not bash). `ml/[dev]` is a
+valid pip extras specifier, but zsh treats an unquoted `[dev]` as a glob
+character-class pattern (matching a single literal `d`, `e`, or `v`
+character) and fails outright with `no matches found:
+.../ml/[dev]` since no such file exists — the command never reaches pip
+at all. Reproduced directly (`echo .../ml/[dev]` → `no matches found`;
+quoted, it resolves and installs correctly). This exact unquoted form was
+already present in this file's own reproduction steps below, so it would
+have failed for anyone actually running it under zsh (the project's own
+documented shell) rather than bash.
+**Fix:** quoted to `pip install -e "ml/[dev]"` everywhere it appears
+(`README.md`, `AGENTS.md`, and this file's reproduction steps below).
+
+### F-14 (Medium, fixed) — README's Kaggle recipe used a `<placeholder>` inside a real shell command
+Found when the user actually ran the Kaggle instructions from `README.md`
+(added this session) and hit a cascading failure: `geoshield.prepare
+--input /kaggle/input/<dataset-slug>/train ...` failed immediately with
+`dataset-slug: No such file or directory` — not a Python error at all.
+Root cause: bash reads an unescaped `<name>` as input redirection ("read
+from a file called `name`"), so `<dataset-slug>` was never a valid
+placeholder syntax to put inside a real `!shell` command in a notebook —
+it needed to be replaced textually, and even then angle brackets in a
+shell command are a footgun regardless. Because `prepare` never ran,
+`records.json` was never created, and every subsequent step in the recipe
+(`splits`, `train` ×2, `evaluate` ×2, `export_onnx`) failed in turn with
+its own `FileNotFoundError` — five cascading failures traced back to one
+bad line, plus a separate, likely copy-paste-driven issue where cell
+boundaries got merged (`export_onnx.py: error: unrecognized arguments: 3
+— train both models` — a stray comment fragment ended up as a CLI arg)
+and a `geoshield/geoshield` double-nested clone from Jupyter's `%cd`
+persisting statefully across a cell re-run.
+**Fix:** rewrote the Kaggle section as separate, independently-runnable
+cells, each asserting its own expected output file exists before printing
+`OK:` and letting the user move on — a bad `--input` (or any other step)
+now fails immediately and locally instead of silently cascading through
+five later steps. Replaced the bracketed placeholder with a Python
+variable (`INPUT_PATH = "..."`) referenced via `"{INPUT_PATH}"` — no raw
+angle brackets in a shell command anywhere in the recipe — and added a
+discovery cell (`glob.glob('/kaggle/input/*/images')`) so the user finds
+the real mount path instead of guessing it. The clean-clone cell now
+resets to an absolute path (`os.chdir('/kaggle/working')` +
+`rm -rf geoshield`) every time, so re-running it can't stack a nested
+clone the way a bare `%cd geoshield` can.
+
+### F-15 (Medium, fixed) — DataLoader used `num_workers=0`, serializing CPU decode against GPU compute
+Found while explaining to the user why the real training run was taking
+~12-13 min/epoch on Apple Silicon MPS — checked whether hardware was the
+only factor before answering, and found `_loader()` in `train.py`
+hardcoded `num_workers=0`. Every tile's image decode (2 PNGs),
+ImageNet normalization, and (for training) geometric augmentation ran on
+a single CPU thread, synchronously, between each GPU batch — the GPU sat
+idle waiting for the next batch to be prepared rather than the next
+batch being loaded in parallel while the GPU worked on the current one.
+This compounds specifically on a fast GPU: moving training to a hosted
+GPU (the plan's own preference, and what the user was about to do on
+Kaggle) makes per-batch compute much faster, which would have made this
+single-threaded loading the new bottleneck, quietly eating into the
+expected speedup instead of realizing it.
+**Fix:** `_loader()` now sets `num_workers = min(4, os.cpu_count() or 1)`
+whenever the dataset has more than 16 samples (the `--smoke-test` fixture
+and small `ml/tests/` fixtures stay at `num_workers=0`, where
+multiprocessing worker startup cost would dominate rather than help), and
+`pin_memory=torch.cuda.is_available()` (a no-op on MPS/CPU, a real win on
+a hosted CUDA GPU). `persistent_workers` was deliberately left at its
+default (`False`): `PreparedTileDataset.epoch` is mutated on the
+main-process dataset object every epoch (`train_dataset.epoch = epoch`,
+the F-02 fix that makes augmentation vary per epoch) and workers are
+plain `Dataset` copies pickled fresh per `DataLoader.__iter__()` call —
+`persistent_workers=True` would keep worker processes alive across
+epochs with a stale copy of `.epoch` frozen at whatever it was when they
+were first spawned, silently reintroducing F-02's exact bug for any run
+with `num_workers>0`. Verified this reasoning holds and nothing broke:
+full `pytest ml/tests` suite (23/23) unaffected, including
+`test_augmentation_varies_across_epochs_and_is_reproducible` (that test's
+determinism comes from a seed that's a pure function of index+epoch, not
+process-global RNG state, so it's unaffected by worker process
+boundaries either way).
+
 ## Environment
 
 - macOS, Apple Silicon (arm64), MPS acceleration available and used for
@@ -362,7 +469,7 @@ evaluate tests; F-09's fix only added an assertion to an existing test).
 ```bash
 # ML pipeline (project-local venv, never the system Python)
 python3 -m venv .venv
-.venv/bin/pip install -e ml/[dev]
+.venv/bin/pip install -e "ml/[dev]"
 PYTHONPATH=ml .venv/bin/python -m pytest ml/tests -q   # 19 passed
 
 # Frontend

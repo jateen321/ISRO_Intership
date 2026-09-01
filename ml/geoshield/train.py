@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from pathlib import Path
 
@@ -87,7 +88,22 @@ class _SyntheticDataset:
 
 def _loader(dataset, batch_size: int, *, shuffle: bool):
     require_torch()
-    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=0, collate_fn=_collate)
+    # Parallelize CPU-side image decode/normalize/augment so the GPU isn't
+    # left idle waiting for the next batch — on a fast hosted GPU (a T4/P100,
+    # as opposed to Apple Silicon MPS where GPU compute itself is already the
+    # slower half) single-threaded data loading becomes the real bottleneck.
+    # Skipped for tiny datasets (the --smoke-test fixture, or small fixtures
+    # in ml/tests/) where worker process startup cost would dominate rather
+    # than help.
+    num_workers = min(4, os.cpu_count() or 1) if len(dataset) > 16 else 0
+    return torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        collate_fn=_collate,
+        pin_memory=torch.cuda.is_available(),
+    )
 
 
 def _forward(model, batch: dict[str, object], model_name: str, device):
@@ -131,7 +147,9 @@ def _run_epoch(model, loader, optimizer, class_weights, model_name, device, *, t
     return total_loss / batches, summarize_metrics(matrix)
 
 
-def _save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, best_metric: float, config: dict[str, object]) -> None:
+def _save_checkpoint(
+    path: Path, model, optimizer, scheduler, epoch: int, best_metric: float, config: dict[str, object], stale_epochs: int = 0
+) -> None:
     require_torch()
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -141,6 +159,7 @@ def _save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, best_m
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
             "best_metric": best_metric,
+            "stale_epochs": stale_epochs,
             "config": config,
         },
         path,
@@ -194,6 +213,7 @@ def train(args: argparse.Namespace) -> dict[str, object]:
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     start_epoch = 0
     best_metric = -float("inf")
+    stale_epochs = 0
     if args.resume:
         checkpoint = torch.load(args.resume, map_location=device)
         model.load_state_dict(checkpoint["model_state"])
@@ -201,6 +221,7 @@ def train(args: argparse.Namespace) -> dict[str, object]:
         scheduler.load_state_dict(checkpoint["scheduler_state"])
         start_epoch = int(checkpoint["epoch"]) + 1
         best_metric = float(checkpoint.get("best_metric", best_metric))
+        stale_epochs = int(checkpoint.get("stale_epochs", 0))
 
     config = {
         "model": args.model,
@@ -220,7 +241,6 @@ def train(args: argparse.Namespace) -> dict[str, object]:
     history: list[dict[str, object]] = []
     if args.resume and history_path.exists():
         history = json.loads(history_path.read_text(encoding="utf-8"))
-    stale_epochs = 0
     for epoch in range(start_epoch, epochs):
         if hasattr(train_dataset, "epoch"):
             train_dataset.epoch = epoch
@@ -244,9 +264,9 @@ def train(args: argparse.Namespace) -> dict[str, object]:
             stale_epochs += 1
             if stale_epochs >= TrainConfig.early_stopping_patience and not smoke:
                 break
-        _save_checkpoint(args.output / f"{args.model}_last.pt", model, optimizer, scheduler, epoch, best_metric, config)
+        _save_checkpoint(args.output / f"{args.model}_last.pt", model, optimizer, scheduler, epoch, best_metric, config, stale_epochs)
         if improved:
-            _save_checkpoint(args.output / f"{args.model}_best.pt", model, optimizer, scheduler, epoch, best_metric, config)
+            _save_checkpoint(args.output / f"{args.model}_best.pt", model, optimizer, scheduler, epoch, best_metric, config, stale_epochs)
         # Written every epoch, not just at the end: a crash or kill mid-run
         # (a real risk on multi-hour real-data training) would otherwise lose
         # the entire loss/metric curve even though per-epoch checkpoints
