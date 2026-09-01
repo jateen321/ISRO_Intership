@@ -390,6 +390,21 @@ determinism comes from a seed that's a pure function of index+epoch, not
 process-global RNG state, so it's unaffected by worker process
 boundaries either way).
 
+### F-16 (High, fixed) — automatic DataLoader workers broke the local MPS/sandbox path
+The first attempt to resume real training on the Mac used the F-15 CUDA
+optimization unconditionally for datasets larger than 16 tiles. PyTorch then
+spawned four workers, and every worker failed to start `torch_shm_manager`
+with `Operation not permitted` in the restricted macOS environment. The
+training process could not fetch its next batch and was stopped before the
+next epoch completed; no model-quality result was produced.
+**Fix:** automatic worker selection now enables up to four workers only when
+CUDA is available (the hosted-GPU target), stays at zero on MPS/CPU, and
+accepts an explicit `--num-workers` override. Added
+`ml/tests/test_train.py::test_loader_stays_serial_without_cuda` to prevent a
+future change from reintroducing the local failure. The user's laptop run
+was stopped and must not be resumed there; use the documented CUDA notebook
+or VM workflow for real training.
+
 ## Environment
 
 - macOS, Apple Silicon (arm64), MPS acceleration available and used for

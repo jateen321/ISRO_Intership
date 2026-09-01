@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", type=Path, help="Checkpoint to resume")
     parser.add_argument("--no-pretrained", action="store_true", help="Do not load ImageNet encoder weights")
+    parser.add_argument("--num-workers", type=int, help="DataLoader workers (defaults to 0 on MPS/CPU, up to 4 on CUDA)")
     parser.add_argument("--smoke-test", action="store_true", help="Run an eight-tile synthetic overfit smoke test")
     return parser
 
@@ -86,7 +87,7 @@ class _SyntheticDataset:
         return self.samples[index]
 
 
-def _loader(dataset, batch_size: int, *, shuffle: bool):
+def _loader(dataset, batch_size: int, *, shuffle: bool, num_workers: int | None = None):
     require_torch()
     # Parallelize CPU-side image decode/normalize/augment so the GPU isn't
     # left idle waiting for the next batch — on a fast hosted GPU (a T4/P100,
@@ -95,7 +96,13 @@ def _loader(dataset, batch_size: int, *, shuffle: bool):
     # Skipped for tiny datasets (the --smoke-test fixture, or small fixtures
     # in ml/tests/) where worker process startup cost would dominate rather
     # than help.
-    num_workers = min(4, os.cpu_count() or 1) if len(dataset) > 16 else 0
+    if num_workers is None:
+        # macOS/MPS and restricted notebook sandboxes cannot reliably start
+        # torch's shared-memory manager. CUDA hosts get parallel decoding by
+        # default; callers can still override this explicitly.
+        num_workers = min(4, os.cpu_count() or 1) if torch.cuda.is_available() and len(dataset) > 16 else 0
+    if num_workers < 0:
+        raise ValueError("num_workers must be non-negative")
     return torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
@@ -204,8 +211,8 @@ def train(args: argparse.Namespace) -> dict[str, object]:
         counts = class_pixel_counts(train_dataset, num_classes=NUM_CLASSES)
 
     class_weights = inverse_sqrt_class_weights(counts).to(device)
-    train_loader = _loader(train_dataset, batch_size, shuffle=True)
-    val_loader = _loader(val_dataset, batch_size, shuffle=False)
+    train_loader = _loader(train_dataset, batch_size, shuffle=True, num_workers=args.num_workers)
+    val_loader = _loader(val_dataset, batch_size, shuffle=False, num_workers=args.num_workers)
     model_class = PostOnlyUNet if args.model == "post_only" else SiameseUNet
     model = model_class(pretrained=not args.no_pretrained and not smoke).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=args.weight_decay)

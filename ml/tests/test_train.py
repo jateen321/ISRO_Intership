@@ -5,7 +5,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from geoshield.train import build_parser, train  # noqa: E402
+from geoshield.train import _loader, build_parser, train  # noqa: E402
 
 
 def _smoke_args(tmp_path, model="post_only", **overrides):
@@ -18,6 +18,19 @@ def _smoke_args(tmp_path, model="post_only", **overrides):
     for flag, value in overrides.items():
         argv += [flag, str(value)]
     return build_parser().parse_args(argv)
+
+
+def test_loader_stays_serial_without_cuda(monkeypatch):
+    class TinyDataset:
+        def __len__(self):
+            return 17
+
+        def __getitem__(self, index):
+            return {"before": torch.zeros(3, 2, 2), "after": torch.zeros(3, 2, 2), "mask": torch.zeros(2, 2, dtype=torch.long), "identifier": str(index)}
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    loader = _loader(TinyDataset(), 2, shuffle=False)
+    assert loader.num_workers == 0
 
 
 def test_smoke_test_overfits_eight_tiles(tmp_path):
