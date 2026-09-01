@@ -380,18 +380,31 @@ method) has to happen first.
    gcloud init
    ```
 4. **Launch the VM** once quota is approved — a Deep Learning VM image
-   ships CUDA/drivers pre-configured, no manual driver install:
+   ships CUDA/drivers pre-configured, no manual driver install. Google
+   periodically renames these image families (e.g. `pytorch-latest-gpu`
+   stopped resolving and was replaced by versioned names encoding the
+   Ubuntu + NVIDIA driver version), so look up the current one instead of
+   trusting any hardcoded name here, including this one:
+   ```bash
+   gcloud compute images list --project deeplearning-platform-release --format="value(family)" --filter="family~pytorch" | sort -u
+   ```
+   As of this writing that prints e.g. `pytorch-2-9-cu129-ubuntu-2404-nvidia-580`
+   — use whatever it prints for you as `--image-family` below:
    ```bash
    gcloud compute instances create geoshield-train \
+     --project=geoshield-training \
      --zone=us-central1-a \
      --machine-type=n1-standard-8 \
      --accelerator="type=nvidia-tesla-t4,count=1" \
-     --image-family=pytorch-latest-gpu \
+     --image-family=pytorch-2-9-cu129-ubuntu-2404-nvidia-580 \
      --image-project=deeplearning-platform-release \
      --maintenance-policy=TERMINATE \
      --boot-disk-size=200GB \
      --metadata="install-nvidia-driver=True"
    ```
+   (`--project` here is your own GCP project, e.g. `geoshield-training` —
+   not to be confused with `--image-project`, Google's shared image
+   repository.)
 5. **SSH in and set up**:
    ```bash
    gcloud compute ssh geoshield-train --zone=us-central1-a
@@ -403,25 +416,32 @@ method) has to happen first.
    pip install -e "ml/[dev]"
    python -c "import torch; print('CUDA available:', torch.cuda.is_available())"   # must print True
    ```
-6. **Get the dataset onto the VM** — from your local machine, in a
-   separate terminal:
+6. **Get the already-prepared dataset onto the VM.** If you've already run
+   [Dataset preparation](#dataset-preparation) locally, skip re-running
+   `geoshield.prepare`/`geoshield.splits` on the VM — just ship the
+   `data/prepared/` tree (tiles + `records.json` + `split_manifest.json`)
+   as-is. It's ~33k individual PNG tiles, so `scp --recurse` (one SSH
+   round-trip per file) is much slower than tarring it into a single
+   stream first. The tiles are already PNG-compressed, so skip `gzip` too
+   — it just burns CPU for no size win. From your local machine:
    ```bash
-   gcloud compute scp data/xbd/train_images_labels_targets.tar geoshield-train:~/xbd.tar --zone=us-central1-a
+   tar -cf /tmp/prepared.tar -C data prepared
+   gcloud compute scp /tmp/prepared.tar geoshield-train:~/prepared.tar --zone=us-central1-a
    ```
    Back on the VM:
    ```bash
-   mkdir -p ~/geoshield/data/xbd/raw
-   tar -xf ~/xbd.tar -C ~/geoshield/data/xbd/raw
-   ls ~/geoshield/data/xbd/raw/train    # confirm images/ and labels/ are there
+   mkdir -p ~/geoshield/data
+   tar -xf ~/prepared.tar -C ~/geoshield/data
+   ls ~/geoshield/data/prepared/records.json ~/geoshield/data/prepared/split_manifest.json  # confirm both exist
    ```
+   (If you'd rather prepare fresh on the VM instead — e.g. you changed
+   `--tile-size` — scp the raw tarball and run `geoshield.prepare` /
+   `geoshield.splits` there instead, same as the Kaggle/Colab flow above.)
 7. **Run it inside `tmux`**, so it survives SSH disconnects — `Ctrl+B`
    then `D` to detach, `tmux attach -t geoshield` to reattach later:
    ```bash
    tmux new -s geoshield
    cd ~/geoshield && source .venv/bin/activate
-   PYTHONPATH=ml python -m geoshield.prepare --input data/xbd/raw/train --output data/prepared --tile-size 512
-   ls data/prepared/records.json    # confirm before continuing
-   PYTHONPATH=ml python -m geoshield.splits --records data/prepared/records.json --output data/prepared/split_manifest.json
    ./ml/train_supervisor.sh
    ```
 8. **Evaluate + export** once training finishes (same commands as

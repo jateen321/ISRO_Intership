@@ -472,6 +472,77 @@ or VM workflow for real training.
 - **OQ-04**: WASM-path vs WebGPU-path output equivalence (F-08) wasn't
   directly diffed — see F-08 for why. Worth forcing both paths and
   comparing masks before calling Step 10 fully closed.
+- **OQ-05 (blocking, abandoned this session — see below)**: attempted
+  `gcloud colab runtime-templates create` / `gcloud colab runtimes create`
+  (Colab Enterprise, the Vertex AI-managed alternative to a raw Compute
+  Engine VM — see README's Google Cloud section) as the hosted environment
+  for OQ-01, in the `geoshield-training` project (billing enabled,
+  `aiplatform.googleapis.com`/`compute.googleapis.com` already on). Three
+  separate quota/capacity walls were hit, in this order:
+  1. **GPU**: per-region/per-type quotas (e.g. `NVIDIA_V100_GPUS`) report a
+     limit of `1.0` in every region checked (`us-central1`, `us-east1`,
+     `us-west1`, `europe-west4`, `asia-east1`, `southamerica-east1`), but
+     that figure is misleading — it's gated by a separate global quota,
+     `GPUS_ALL_REGIONS`, hard-capped at `0.0` for this project (confirmed
+     via `gcloud compute project-info describe --format="json(quotas)"`).
+     No GPU runtime could be created anywhere until that's raised via
+     Console → IAM & Admin → Quotas → "GPUs (all regions)". The user
+     confirmed this quota increase is **not allowed** for this account, so
+     the GPU path is closed, not just pending.
+  2. **Disk**: switching to a CPU-only template, a `200GB`/`140GB`
+     `PD_SSD` disk collided with `SSD_TOTAL_GB` (limit `250` in
+     `us-central1`) — a pre-existing, auto-created "Default" Colab
+     Enterprise runtime (`e2-standard-4`, `pd-standard`, silently
+     provisioned the first time `gcloud colab` touched this project) was
+     already consuming headroom. Fixed by switching the template's disk
+     type to `PD_STANDARD` (`DISKS_TOTAL_GB` limit `2048`, effectively
+     unconstrained) — this is what actually unblocked runtime creation.
+  3. **CPU**: `gcloud colab executions create` (the ephemeral,
+     fire-and-forget notebook-execution API — the CLI-only equivalent of
+     Kaggle's "Save & Run All") failed 4/4 times across two regions and two
+     machine sizes (`e2-standard-8`, `e2-standard-4`), alternating between
+     `CPUS_ALL_REGIONS` exceeded (limit `12` globally) and genuine
+     zone-capacity errors. Root cause: **`gcloud colab runtimes create`
+     (persistent) and `gcloud colab executions create` (ephemeral) draw
+     from the same tiny 12-vCPU global cap but provision *separately* — an
+     execution never reuses an already-running runtime's compute.** With a
+     persistent `e2-standard-8` runtime already up, there was no quota left
+     for an execution's own VM; deleting the runtime to free quota for an
+     execution never once succeeded anyway (capacity or quota errors every
+     time), so that trade was a net loss — a runtime that worked was
+     deleted to make room for a job that never ran.
+  **What's actually confirmed**: `gcloud colab runtimes create` (the
+  persistent-runtime path) reliably succeeds — twice, with `e2-standard-8`
+  and `e2-standard-4`, both `PD_STANDARD` disk, both went `RUNNING`/
+  `HEALTHY`. The template that's known-good: `us-central1`,
+  `notebookRuntimeTemplates/8872968676198842368` (`e2-standard-8`, 200GB
+  `PD_STANDARD`, `idle-shutdown-timeout=24h`). **What's unconfirmed**:
+  whether that runtime's Jupyter proxy (`proxyUri`, e.g.
+  `https://<id>-dot-us-central1.aiplatform-notebook.googleusercontent.com`)
+  accepts authenticated REST/kernel-gateway calls from outside a browser
+  (`gcloud auth print-identity-token` + `POST /api/kernels`) — that's the
+  discriminating test for whether this path can be driven CLI-only at all,
+  versus needing the browser-based JupyterLab terminal, versus falling
+  back to the README's raw Compute Engine VM + `tmux` path (real SSH,
+  no managed-capacity lottery, and CPU-only GCE instances don't touch the
+  `GPUS_ALL_REGIONS` quota that blocked step 1 above).
+  **Also unconfirmed**: whether CPU training is even worth pursuing at any
+  of this — no CPU-vs-MPS speed measurement was taken before this session's
+  work stopped. The MPS estimate (~12 min/epoch, see the "Training on
+  Colab / Kaggle" README section) suggests CPU could plausibly run into
+  multi-day territory for a full 30-epoch × 2-model run; that should be
+  measured locally (force `device = torch.device("cpu")`, time a handful
+  of real batches from `data/prepared`) before spending more effort on
+  hosted-CPU infrastructure.
+  **Housekeeping**: 8 runtime templates were created across this session
+  (3 GPU — dead, quota denied; 5 CPU, of varying disk-type/size/machine
+  combinations working through the walls above). Only
+  `8872968676198842368` (`us-central1`) is worth keeping; the rest are
+  free-standing config (no cost while unused) but clutter — safe to
+  `gcloud colab runtime-templates delete` the other 7 next time this is
+  picked up. `gs://geoshield-training-prepared-data/prepared.tar` (7.9GB,
+  the tarred `data/prepared/`) is uploaded and ready to pull onto whatever
+  compute ends up running the real job.
 
 ## Planned verification (for what's still open)
 
@@ -480,6 +551,14 @@ or VM workflow for real training.
   models, evaluate the untouched test split, and export the winning checkpoint
   to replace the synthetic placeholder model.
 - OQ-04 above: explicit WASM-vs-WebGPU mask diff.
+- OQ-05 above: (1) measure real CPU-vs-MPS per-batch speed locally before
+  investing more effort in hosted-CPU infra; (2) test whether
+  `notebookRuntimes/<id>`'s `proxyUri` accepts CLI-driven kernel-gateway
+  calls, and if not, fall back to the README's raw Compute Engine VM +
+  `tmux` path; (3) either way, `gcloud colab runtimes create
+  --runtime-template=8872968676198842368` is the known-good starting
+  point, and `gs://geoshield-training-prepared-data/prepared.tar` is
+  ready to pull onto whatever compute ends up running the job.
 
 ## How to reproduce the audit
 
