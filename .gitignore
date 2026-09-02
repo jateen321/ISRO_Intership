@@ -38,7 +38,9 @@ tsconfig.tsbuildinfo
 /outputs/
 /work/
 
-# GeoShield ML data and training artifacts
+# GeoShield ML data and resumable PyTorch training artifacts. Checkpoints are
+# intentionally local; the browser-consumable ONNX weights below are the
+# canonical model artifact that must be committed after a real training run.
 /data/
 /datasets/
 /checkpoints/

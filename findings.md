@@ -283,6 +283,33 @@ dual-input path, missing-checkpoint error, empty-split error) — full
 suite now 23/23 passing (19 before F-09/F-10/F-11 this session, +4 new
 evaluate tests; F-09's fix only added an assertion to an existing test).
 
+### F-12 (Medium, fixed) — synthetic overfit gate failed on the CPU backend
+The deterministic post-only smoke test did not reliably meet its own
+`damage_macro_f1 > 0.85` acceptance threshold on CPU. With the smoke-only
+learning rate of `1e-3`, the 60-epoch run reached 0.8254 on the Linux CPU
+backend even though its loss remained finite and decreased normally. The
+same fixture had originally been tuned on Apple MPS, where it exceeded the
+gate, making the regression test backend-dependent. **Fix:** raised only the
+automatic post-only smoke-test learning rate to `2e-3`; the identical CPU run
+now reaches 0.8623. The Siamese fixture remains at `1e-3` (0.9858 on the same
+CPU), since it is less stable at the higher rate. Explicit `--learning-rate`
+values and the real-data default remain unchanged. Caught by running the
+complete ML suite in a clean Linux environment:
+`ml/tests/test_train.py::test_smoke_test_overfits_eight_tiles`.
+
+### F-13 (High, fixed) — smoke checkpoints could silently replace the shipped model
+The training documentation distinguished local PyTorch checkpoints from the shipped
+ONNX artifact, but the export command accepted either a real xBD checkpoint or a
+synthetic smoke-test checkpoint without an explicit acknowledgement. That made it too
+easy to overwrite the Git-tracked browser weights with a meaningless pipeline fixture,
+and it obscured that `public/models/geoshield-siamese.onnx` is the canonical weight
+artifact users receive from the repository. **Fix:** checkpoints now record explicit
+`training_data` provenance (`xbd` or `synthetic_smoke`), export refuses smoke
+checkpoints unless `--allow-placeholder` is supplied, and the publishing instructions
+now include staging and committing both the ONNX file and checksum metadata. Existing
+older checkpoints remain readable through the prior `data` field. Regression test:
+`ml/tests/test_export_onnx.py::test_export_rejects_smoke_checkpoint_without_explicit_override`.
+
 ## Environment
 
 - macOS, Apple Silicon (arm64), MPS acceleration available and used for
@@ -422,3 +449,7 @@ npm run build && npm start   # wrangler dev on the real build, http://localhost:
   count (1,170 / 630 / 999) even though it's balanced by event — expected
   behavior of event-held-out splitting with this few, this uneven a set of
   events, not a bug.
+- **2026-09-01**: clean Linux/CPU verification exposed and fixed F-12, a
+  backend-dependent failure in the synthetic overfit gate. The real xBD data
+  is not present in this checkout, so real-data training was not attempted;
+  both synthetic model variants were trained as pipeline checks instead.

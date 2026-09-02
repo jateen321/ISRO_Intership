@@ -181,7 +181,9 @@ PYTHONPATH=ml .venv/bin/python -m geoshield.train \
   --output ml/checkpoints
 ```
 
-Checkpoints: `{model}_best.pt`, `{model}_last.pt`. Training curves are appended to
+Checkpoints: `{model}_best.pt`, `{model}_last.pt`. These large, optimizer-bearing
+files are resumable training state and are intentionally gitignored. They are not
+the weights used by the website. Training curves are appended to
 `{model}_history.json` **every epoch** (safe to tail during long runs).
 
 **Resume after interruption** (Colab disconnect, laptop sleep, etc.):
@@ -264,7 +266,13 @@ gitignored.
 
 ---
 
-## ONNX export (replace the placeholder)
+## Publish the trained weights (replace the placeholder)
+
+The repository **does store the weights used by the application**: the canonical,
+deployable artifact is `public/models/geoshield-siamese.onnx`, with its provenance
+and checksum in `public/models/geoshield-siamese.json`. Both files are explicitly
+tracked by Git and served to the browser as same-origin static assets. A `.pt`
+checkpoint is only needed to resume training or create another export.
 
 Export verifies **fp32 PyTorch ↔ ONNX parity** (≥ 99.9% argmax agreement on random
 inputs), then **int8-dynamic-quantizes** Conv/MatMul/Gemm ops so the shipped file stays
@@ -279,13 +287,20 @@ PYTHONPATH=ml .venv/bin/python -m geoshield.export_onnx \
 
 This writes `public/models/geoshield-siamese.json` alongside the ONNX file (SHA-256,
 quantization agreement, `trained_on_real_data`, class mapping). Rebuild the frontend
-after replacing the model:
+after replacing the model, then commit both deployable files so every clone and
+deployment uses the exact trained weights:
 
 ```bash
 npm run build
+git add public/models/geoshield-siamese.onnx public/models/geoshield-siamese.json
+git commit -m "model: publish xBD-trained siamese weights"
+git push
 ```
 
 The UI reads `trained_on_real_data` from metadata and updates its disclosure banner.
+Export now refuses synthetic smoke checkpoints by default, preventing a pipeline test
+from silently replacing the real browser model. `--allow-placeholder` exists only for
+intentional development fixtures and leaves `trained_on_real_data: false` in metadata.
 
 ---
 

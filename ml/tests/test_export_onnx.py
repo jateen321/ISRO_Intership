@@ -31,6 +31,7 @@ def test_export_produces_valid_onnx_with_parity(smoke_checkpoint, tmp_path):
             "--output", str(onnx_path),
             "--image-size", "64",
             "--parity-samples", "4",
+            "--allow-placeholder",
         ]
     )
     metadata = export(args)
@@ -61,4 +62,12 @@ def test_export_rejects_missing_checkpoint(tmp_path):
         ["--model", "siamese", "--checkpoint", str(tmp_path / "missing.pt"), "--output", str(tmp_path / "out.onnx")]
     )
     with pytest.raises(FileNotFoundError):
+        export(args)
+
+
+def test_export_rejects_smoke_checkpoint_without_explicit_override(smoke_checkpoint, tmp_path):
+    args = build_parser().parse_args(
+        ["--model", "siamese", "--checkpoint", str(smoke_checkpoint), "--output", str(tmp_path / "out.onnx")]
+    )
+    with pytest.raises(ValueError, match="synthetic smoke-test checkpoint"):
         export(args)

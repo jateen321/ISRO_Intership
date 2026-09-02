@@ -158,7 +158,14 @@ def train(args: argparse.Namespace) -> dict[str, object]:
     # to demonstrate that the model can memorize a handful of tiles; 12 epochs
     # only reached ~0.44 val macro-F1, so raise the cap until it actually overfits.
     epochs = min(args.epochs, 60) if smoke else args.epochs
-    learning_rate = 1e-3 if smoke and args.learning_rate == 1e-4 else args.learning_rate
+    # The post-only fixture converges a little more slowly on CPU than on MPS.
+    # Its deterministic run can stop at ~0.83 macro-F1 with 1e-3, whereas
+    # 2e-3 clears the gate. Keep the Siamese smoke rate at 1e-3: its fused
+    # branch converges reliably there and is less stable at the higher rate.
+    if smoke and args.learning_rate == 1e-4:
+        learning_rate = 2e-3 if args.model == "post_only" else 1e-3
+    else:
+        learning_rate = args.learning_rate
 
     if smoke:
         train_dataset = _SyntheticDataset(image_size)
@@ -204,6 +211,9 @@ def train(args: argparse.Namespace) -> dict[str, object]:
 
     config = {
         "model": args.model,
+        # Persist provenance in the checkpoint. Export must not infer this from
+        # a machine-specific path such as `data/prepared`.
+        "training_data": "synthetic_smoke" if smoke else "xbd",
         "seed": args.seed,
         "image_size": image_size,
         "batch_size": batch_size,

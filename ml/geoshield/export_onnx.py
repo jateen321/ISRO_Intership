@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-size", type=int, default=512)
     parser.add_argument("--parity-samples", type=int, default=8)
     parser.add_argument("--parity-threshold", type=float, default=0.999)
+    parser.add_argument(
+        "--allow-placeholder",
+        action="store_true",
+        help="Allow exporting a synthetic smoke-test checkpoint (never use for a production model)",
+    )
     return parser
 
 
@@ -106,6 +111,20 @@ def export(args: argparse.Namespace) -> dict[str, object]:
         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
 
     model, checkpoint = _load_model(args.model, args.checkpoint)
+    checkpoint_config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
+    training_data = checkpoint_config.get("training_data")
+    # Backward compatibility for checkpoints created before explicit provenance
+    # was recorded. The smoke fixture always stored data='.'.
+    is_trained = training_data == "xbd" or (
+        training_data is None
+        and bool(checkpoint_config.get("data"))
+        and checkpoint_config.get("data") not in (".", None)
+    )
+    if not is_trained and not args.allow_placeholder:
+        raise ValueError(
+            "Refusing to publish a synthetic smoke-test checkpoint. "
+            "Pass --allow-placeholder only when intentionally building a disclosed test artifact."
+        )
     input_names, dummy_inputs = _input_spec(args.model, args.image_size)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -162,8 +181,6 @@ def export(args: argparse.Namespace) -> dict[str, object]:
         fp32_path.unlink(missing_ok=True)
 
     sha256 = hashlib.sha256(args.output.read_bytes()).hexdigest()
-    checkpoint_config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
-    is_trained = bool(checkpoint_config.get("data")) and checkpoint_config.get("data") not in (".", None)
     metadata = {
         "model": args.model,
         "onnx_path": str(args.output),
